@@ -57,7 +57,7 @@ def extract_fingercode_features(image, num_sectors=160, gabor_filters=None):
     features = np.array(features).flatten()[:640]  # Truncate or pad to 640 dimensions if necessary
     if features.shape[0] < 640:
         features = np.pad(features, (0, 640 - features.shape[0]), 'constant')
-    
+    print("Divided into sectors and coverted into 640 dimensional vector\n")
     return features
 
 
@@ -74,5 +74,5 @@ def load_and_preprocess_image(image_path):
     # Enhance the image using CLAHE (Contrast Limited Adaptive Histogram Equalization)
     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
     enhanced_image = clahe.apply(blurred_image)
-
+    print("Sucesful image processing...\n")
     return enhanced_image
