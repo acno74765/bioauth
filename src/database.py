@@ -5,30 +5,33 @@ import numpy as np
 import os
 from .preprocessing import load_and_preprocess_image, extract_fingercode_features
 
-def quantize_features(features, scale=1000):
-    """Scale and convert floating-point features to integers."""
-    quantized_features = np.round(features * scale).astype(np.int32)  # Scale and round to integers
+def quantize_features(features, max_value=127):
+    """Scale and convert floating-point features to integers within a safe range."""
+    # Determine dynamic scale factor to fit max_value
+    scale = max_value / np.max(np.abs(features)) if np.max(np.abs(features)) > 0 else 1
+    quantized_features = np.clip(np.round(features * scale), 0, max_value).astype(np.uint7)
+    print(f"Dynamic Scale Factor: {scale}")
     return quantized_features
 
-def encrypt_features(features):
-    """Quantize and encrypt the feature vector using Concrete."""
-    # Quantize features to integers
+
+def encrypt_features(features, circuit):
+    """Quantize and encrypt the feature vector using the provided Concrete circuit."""
     quantized_features = quantize_features(features)
-
-    # Define the encryption function (example: identity function)
-    def encrypt_fn(x):
-        return x + 1  # Example logic: Add 1 to input for encryption demonstration
-    
-    # Compile the encryption function
-    compiler = fhe.Compiler(encrypt_fn, {"x": "encrypted"})
-    inputset = [(quantized_features,)]
-    circuit = compiler.compile(inputset)
-    circuit.keygen()
-
-    # Encrypt the quantized feature vector
-    encrypted_features = circuit.encrypt(quantized_features)
+    print(f"Quantized Features (dtype: {quantized_features.dtype}): {quantized_features[:10]}...")
+    encrypted_value = circuit.encrypt(quantized_features)
+    encrypted_bytes = encrypted_value.serialize()
     print("Features encrypted successfully.")
-    return encrypted_features
+    return encrypted_bytes
+
+
+def get_encryption_circuit():
+    def encrypt_fn(x):
+        return x + 1  # Example encryption logic, modify as needed
+    
+    compiler = fhe.Compiler(encrypt_fn, {"x": "encrypted"})
+    inputset = [(np.random.randint(0, 127, size=640).astype(np.uint7),)] 
+    circuit = compiler.compile(inputset)
+    return circuit
 
 def create_database(db_name="data/fingerprints.db"):
     """Create an SQLite database and a table for storing fingerprint features."""
@@ -48,41 +51,70 @@ def create_database(db_name="data/fingerprints.db"):
 
 # Stored as BLOB and not encrypted
 # Using ZAMA concrete library for encryption
-def insert_features_into_database(db_name, label, features):
-    """Encrypt and insert fingerprint features into the SQLite database."""
-    encrypted_features = encrypt_features(features)
-    encrypted_blob = encrypted_features.tobytes()
+def insert_features_into_database(db_name, label, features, circuit):
+    """Insert encrypted fingerprint features into the SQLite database using the provided circuit."""
+    if features is None:
+        print(f"Error: Feature vector for {label} is None. Skipping insertion.")
+        return
+    
+    # Encrypt and serialize the features using the same circuit
+    encrypted_features = encrypt_features(features, circuit)
+    
+    # Insert the serialized encrypted features into the database
     conn = sqlite3.connect(db_name)
     cursor = conn.cursor()
     cursor.execute('''
         INSERT INTO fingerprints (label, features)
         VALUES (?, ?)
-    ''', (label, encrypted_blob))
+    ''', (label, encrypted_features))
     conn.commit()
     conn.close()
-    print("Successful insertion into database - encrypted features")
+    print(f"Successful insertion for {label} into the database.")
+
+
 
 
 def create_and_populate_database(fingerprint_dir, db_name="data/fingerprints.db"):
-    """Create a database and populate it with encrypted fingerprint feature vectors."""
+    """Create a database and populate it with fingerprint feature vectors using a single circuit."""
+    # Generate the circuit once
+    circuit = get_encryption_circuit()
     create_database(db_name)
+
     for filename in os.listdir(fingerprint_dir):
-        if filename.endswith(".bmp") or filename.endswith(".jpg") or filename.endswith(".png"):
+        if filename.endswith((".bmp", ".jpg", ".png")):
             image_path = os.path.join(fingerprint_dir, filename)
             try:
-                # Process the fingerprint image
                 enhanced_image = load_and_preprocess_image(image_path)
-                finger_code_features = extract_fingercode_features(enhanced_image)
-                label = os.path.splitext(filename)[0]
+                if enhanced_image is None:
+                    print(f"Skipping {filename}: Failed to process image.")
+                    continue
                 
-                # Insert encrypted features into the database
-                insert_features_into_database(db_name, label, finger_code_features)
-                print(f"Processed {filename} - Encrypted features inserted into the database.")
+                finger_code_features = extract_fingercode_features(enhanced_image)
+                if finger_code_features is None:
+                    print(f"Skipping {filename}: Failed to extract features.")
+                    continue
+
+                label = os.path.splitext(filename)[0]
+                print(f"Feature vector - plain text - {finger_code_features[:10]}....")
+                insert_features_into_database(db_name, label, finger_code_features, circuit)
+                print(f"Processed {filename} - Features inserted into the database.")
             except Exception as e:
                 print(f"Failed to process {filename}: {e}")
 
+def deserialize_encrypted_features(encrypted_blob, circuit):
+    """Deserialize the encrypted features using the same circuit."""
+    encrypted_value = circuit.deserialize(encrypted_blob)
+    return encrypted_value
 
-def view_encrypted_data(db_name="data/fingerprints.db"):
+
+def view_encrypted_data(db_name="data/fingerprints.db", circuit=None):
+    """
+    Retrieve and display encrypted features from the database.
+    Optionally deserialize the encrypted data if a circuit is provided.
+    """
+    if circuit is None:
+        print("Warning: No circuit provided. Encrypted data will not be deserialized.")
+    
     conn = sqlite3.connect(db_name)
     cursor = conn.cursor()
     cursor.execute("SELECT label, features FROM fingerprints")
@@ -90,11 +122,21 @@ def view_encrypted_data(db_name="data/fingerprints.db"):
     conn.close()
 
     for row in rows:
-        print(f"Label: {row[0]}")
-        print(f"Encrypted Features (BLOB): {row[1]}")
-        print(f"Length of Encrypted Features: {len(row[1])}")
+        label = row[0]
+        encrypted_blob = row[1]
+        print(f"Label: {label}")
+        print(f"Encrypted Features (BLOB): {encrypted_blob[:100]}...")  # Print part of the BLOB
+        print(f"Length of Encrypted Features: {len(encrypted_blob)}")
 
-
+        # Deserialize the encrypted features if the circuit is provided
+        if circuit:
+            try:
+                encrypted_value = deserialize_encrypted_features(encrypted_blob, circuit)
+                print(f"Deserialized Encrypted Value: {encrypted_value[:10]}")
+                decrypted_features = circuit.decrypt(encrypted_value)
+                print(f"Decrypted Features: {decrypted_features[:10]}...")
+            except Exception as e:
+                print(f"Error deserializing encrypted data for {label}: {e}")
 
 def delete_data_from_database(db_name, label):
     """Delete a fingerprint entry from the SQLite database based on the label."""

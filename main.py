@@ -2,16 +2,21 @@
 
 import os
 import numpy as np
-from src.database import create_and_populate_database, view_encrypted_data
+from src.database import create_and_populate_database, view_encrypted_data , get_encryption_circuit
 # from src.secure_computation import generate_paillier_keypair, secure_distance_computation, decrypt_and_unmask_distances
 
 if __name__ == "__main__":
     # Directory containing fingerprint images
     fingerprint_dir = "data/fingerprints"
     
+    # Generate the encryption circuit once
+    circuit = get_encryption_circuit()
+    
     # Create and populate the database from the fingerprint images
     create_and_populate_database(fingerprint_dir)
-    view_encrypted_data()
+    
+    # View encrypted data using the same circuit
+    view_encrypted_data(db_name="data/fingerprints.db", circuit=circuit)
     # Generate a public-private key pair for Paillier encryption
     #public_key, private_key = generate_paillier_keypair()
     
