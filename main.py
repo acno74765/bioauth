@@ -3,7 +3,7 @@
 import os
 import numpy as np
 from src.database import create_and_populate_database, view_encrypted_data
-from src.secure_computation import generate_paillier_keypair, secure_distance_computation, decrypt_and_unmask_distances
+# from src.secure_computation import generate_paillier_keypair, secure_distance_computation, decrypt_and_unmask_distances
 
 if __name__ == "__main__":
     # Directory containing fingerprint images
